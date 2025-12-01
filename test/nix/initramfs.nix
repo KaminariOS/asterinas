@@ -1,5 +1,5 @@
 { lib, stdenvNoCC, fetchFromGitHub, hostPlatform, writeClosure, busybox, apps
-, benchmark, syscall, dnsServer, pkgs }:
+, benchmark, syscall, dnsServer, pkgs, withGcc ? false, withCargo ? false }:
 let
   etc = lib.fileset.toSource {
     root = ./../src/etc;
@@ -17,6 +17,8 @@ let
     ++ lib.optionals (benchmark != null) [ benchmark.package ]
     ++ lib.optionals (syscall != null) [ syscall.package ]
     ++ lib.optionals is_evtest_included [ pkgs.evtest ];
+  toolchains = lib.optionals withGcc [ pkgs.gcc ]
+    ++ lib.optionals withCargo [ pkgs.rustc pkgs.cargo ];
 in stdenvNoCC.mkDerivation {
   name = "initramfs";
   buildCommand = ''
@@ -30,6 +32,13 @@ in stdenvNoCC.mkDerivation {
     cp -r ${busybox}/bin/* $out/bin/
     ${lib.optionalString is_evtest_included ''
       cp -r ${pkgs.evtest}/bin/* $out/bin/
+    ''}
+
+    ${lib.optionalString (toolchains != [ ]) ''
+      # Expose selected toolchains on PATH by linking binaries into /bin.
+      for pkg in ${lib.concatStringsSep " " toolchains}; do
+        ln -sfn $pkg/bin/* $out/bin/ 2>/dev/null || true
+      done
     ''}
 
     cp -r ${etc}/* $out/etc/
@@ -63,12 +72,12 @@ in stdenvNoCC.mkDerivation {
     # including the packages themselves.
     # The output of `writeClosure` is equivalent to `nix-store -q --requisites`.
     mkdir -p $out/nix/store
-    pkg_path=${lib.strings.concatStringsSep ":" all_pkgs}
+    pkg_path=${lib.strings.concatStringsSep ":" (all_pkgs ++ toolchains)}
     while IFS= read -r dep_path; do
       if [[ "$pkg_path" == *"$dep_path"* ]]; then
         continue
       fi
       cp -r $dep_path $out/nix/store/
-    done < ${writeClosure all_pkgs}
+    done < ${writeClosure (all_pkgs ++ toolchains)}
   '';
 }

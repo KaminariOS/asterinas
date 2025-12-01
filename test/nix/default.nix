@@ -1,7 +1,7 @@
 { target ? "x86_64", enableBasicTest ? false, enableBenchmark ? false
 , enableSyscallTest ? false, syscallTestSuite ? "ltp"
 , syscallTestWorkDir ? "/tmp", dnsServer ? "none", smp ? 1
-, initramfsCompressed ? true, }:
+, initramfsCompressed ? true, withGcc ? false, withCargo ? false }:
 let
   crossSystem.config = if target == "x86_64" then
     "x86_64-unknown-linux-gnu"
@@ -37,6 +37,8 @@ in rec {
     benchmark = if enableBenchmark then benchmark else null;
     syscall = if enableSyscallTest then syscall else null;
     dnsServer = dnsServer;
+    withGcc = withGcc;
+    withCargo = withCargo;
   };
   initramfs-image = pkgs.callPackage ./initramfs-image.nix {
     inherit initramfs;

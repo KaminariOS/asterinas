@@ -22,6 +22,20 @@ else
 INITRAMFS_IMAGE := $(BUILD_DIR)/initramfs.cpio.gz
 INITRAMFS_COMPRESSED := true
 endif
+WITH_GCC ?= 0
+WITH_CARGO ?= 0
+ifeq ($(WITH_GCC),1)
+WITH_GCC := true
+endif
+ifeq ($(WITH_GCC),0)
+WITH_GCC := false
+endif
+ifeq ($(WITH_CARGO),1)
+WITH_CARGO := true
+endif
+ifeq ($(WITH_CARGO),0)
+WITH_CARGO := false
+endif
 EXT2_IMAGE := $(BUILD_DIR)/ext2.img
 EXFAT_IMAGE := $(BUILD_DIR)/exfat.img
 
@@ -68,6 +82,8 @@ $(INITRAMFS_IMAGE): $(INITRAMFS)
 		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
 		--argstr dnsServer ${DNS_SERVER} \
 		--arg initramfsCompressed $(INITRAMFS_COMPRESSED) \
+		--arg withGcc $(WITH_GCC) \
+		--arg withCargo $(WITH_CARGO) \
 		--arg smp $(SMP) \
 		--out-link $@ \
 		nix -A initramfs-image
@@ -83,6 +99,8 @@ $(INITRAMFS):
 		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
 		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
 		--argstr dnsServer ${DNS_SERVER} \
+		--arg withGcc $(WITH_GCC) \
+		--arg withCargo $(WITH_CARGO) \
 		--arg smp $(SMP) \
 		--out-link $@ \
 		nix -A initramfs
@@ -167,6 +185,8 @@ initramfs_pkgs:
 		$(NIX_QUIET) \
 		--argstr target x86_64 \
 		--arg enableBenchmark true \
+		--arg withGcc $(WITH_GCC) \
+		--arg withCargo $(WITH_CARGO) \
 		--out-link /nix/var/nix/gcroots/auto/x86_64-initramfs-with-benchmark \
 		-A initramfs-image
 
