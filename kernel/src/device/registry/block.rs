@@ -37,19 +37,22 @@ pub(super) fn init_in_first_kthread() {
 
 pub(super) fn init_in_first_process(fs_resolver: &FsResolver) -> Result<()> {
     for device in aster_block::collect_all() {
-        let name = device.name().to_string();
         let device = Arc::new(BlockFile::new(device));
-        add_node(device, &name, fs_resolver)?;
+        if let Some(devtmpfs_path) = device.devtmpfs_path() {
+            add_node(device, &devtmpfs_path, fs_resolver)?;
+        }
     }
 
     Ok(())
 }
 
 /// Represents a block device inode in the filesystem.
-///
-/// Only implements the `Device` trait.
+//
+// TODO: This type wraps an `Arc<dyn BlockDevice>` in another `Arc` just to implement the `Device`
+// trait. It leads to redundant vtable dispatch, reference counting, and heap allocation. We should
+// devise a better strategy to eliminate the unnecessary intermediate `Arc`.
 #[derive(Debug)]
-pub struct BlockFile(Arc<dyn BlockDevice>);
+struct BlockFile(Arc<dyn BlockDevice>);
 
 impl BlockFile {
     fn new(device: Arc<dyn BlockDevice>) -> Self {
@@ -66,16 +69,21 @@ impl Device for BlockFile {
         self.0.id()
     }
 
+    fn devtmpfs_path(&self) -> Option<String> {
+        Some(self.0.name().into())
+    }
+
     fn open(&self) -> Result<Box<dyn FileIo>> {
         Ok(Box::new(OpenBlockFile(self.0.clone())))
     }
 }
 
 /// Represents an opened block device file ready for I/O operations.
-///
-/// Does not implement the `Device` trait but provides full implementations
-/// for I/O related traits.
-pub struct OpenBlockFile(Arc<dyn BlockDevice>);
+//
+// TODO: This type wraps an `Arc<dyn BlockDevice>` in another `Box` just to implement the `FileIo`
+// trait. It leads to redundant vtable dispatch and heap allocation. We should devise a better
+// strategy to eliminate the unnecessary intermediate `Box`.
+struct OpenBlockFile(Arc<dyn BlockDevice>);
 
 impl InodeIo for OpenBlockFile {
     fn read_at(

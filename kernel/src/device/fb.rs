@@ -9,11 +9,12 @@ use ostd::{
     Pod,
 };
 
-use super::char::{self, CharDevice, DevtmpfsName};
+use super::registry::char;
 use crate::{
     current_userspace,
     events::IoEvents,
     fs::{
+        device::{Device, DeviceType},
         file_handle::Mappable,
         inode_handle::FileIo,
         utils::{InodeIo, IoctlCmd, StatusFlags},
@@ -201,9 +202,9 @@ struct FbCmapUser {
     pub transp: usize,
 }
 
-impl CharDevice for Fb {
-    fn devtmpfs_name(&self) -> DevtmpfsName<'_> {
-        DevtmpfsName::new("fb0", None)
+impl Device for Fb {
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
     }
 
     fn id(&self) -> DeviceId {
@@ -211,7 +212,11 @@ impl CharDevice for Fb {
         DeviceId::new(MajorId::new(29), MinorId::new(0))
     }
 
-    fn open(&self) -> Result<Arc<dyn FileIo>> {
+    fn devtmpfs_path(&self) -> Option<String> {
+        Some("fb0".into())
+    }
+
+    fn open(&self) -> Result<Box<dyn FileIo>> {
         let Some(framebuffer) = FRAMEBUFFER.get() else {
             return Err(Error::with_message(
                 Errno::ENODEV,
@@ -219,7 +224,7 @@ impl CharDevice for Fb {
             ));
         };
         let framebuffer = framebuffer.clone();
-        Ok(Arc::new(FbHandle { framebuffer }))
+        Ok(Box::new(FbHandle { framebuffer }))
     }
 }
 

@@ -5,8 +5,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use hashbrown::HashMap;
 use ostd::sync::RwMutexWriteGuard;
 
-use super::is_dot_or_dotdot;
+use super::{is_dot, is_dot_or_dotdot, is_dotdot};
 use crate::{
+    fs,
     fs::utils::{Inode, InodeMode, InodeType, MknodType},
     prelude::*,
 };
@@ -175,15 +176,8 @@ impl Dentry {
     pub(super) fn lookup_via_fs(&self, name: &str) -> Result<Arc<Dentry>> {
         let children = self.children.upread();
 
-        let inode = match self.inode.lookup(name) {
-            Ok(inode) => inode,
-            Err(e) => {
-                if e.error() == Errno::ENOENT && self.is_dentry_cacheable() {
-                    children.upgrade().insert_negative(String::from(name));
-                }
-                return Err(e);
-            }
-        };
+        // TODO: Add a right implementation to cache negative dentry.
+        let inode = self.inode.lookup(name)?;
         let name = String::from(name);
         let target = Self::new(inode, DentryOptions::Leaf((name.clone(), self.this())));
 
@@ -236,8 +230,9 @@ impl Dentry {
         );
 
         if dentry.is_dentry_cacheable() {
-            children.upgrade().insert(name, dentry.clone());
+            children.upgrade().insert(name.clone(), dentry.clone());
         }
+        fs::notify::on_link(dentry.parent().unwrap().inode(), dentry.inode(), name);
         Ok(())
     }
 
@@ -247,13 +242,45 @@ impl Dentry {
             return_errno!(Errno::ENOTDIR);
         }
 
+        if is_dot_or_dotdot(name) {
+            return_errno_with_message!(Errno::EINVAL, "unlink on . or ..");
+        }
+
         let children = self.children.upread();
         children.check_mountpoint(name)?;
 
+        let mut children = children.upgrade();
+        let cached_child = children.delete(name);
+
+        let child_inode = match cached_child {
+            Some(child) => {
+                // Cache hit: use the cached dentry
+                child.inode().clone()
+            }
+            None => {
+                // Cache miss: need to lookup from the underlying filesystem
+                drop(children);
+                self.inode.lookup(name)?
+            }
+        };
+
         self.inode.unlink(name)?;
 
-        let mut children = children.upgrade();
-        children.delete(name);
+        let nlinks = child_inode.metadata().nlinks;
+        fs::notify::on_link_count(&child_inode);
+        if nlinks == 0 {
+            fs::notify::on_inode_removed(&child_inode);
+        }
+        fs::notify::on_delete(self.inode(), &child_inode, || name.to_string());
+        if nlinks == 0 {
+            let publisher = child_inode.fs_event_publisher();
+            publisher.disable_new_subscribers();
+            let removed_nr_subscribers = publisher.remove_all_subscribers();
+            child_inode
+                .fs()
+                .fs_event_subscriber_stats()
+                .remove_subscribers(removed_nr_subscribers);
+        }
         Ok(())
     }
 
@@ -263,13 +290,47 @@ impl Dentry {
             return_errno!(Errno::ENOTDIR);
         }
 
+        if is_dot(name) {
+            return_errno_with_message!(Errno::EINVAL, "rmdir on .");
+        }
+        if is_dotdot(name) {
+            return_errno_with_message!(Errno::ENOTEMPTY, "rmdir on ..");
+        }
+
         let children = self.children.upread();
         children.check_mountpoint(name)?;
 
+        let mut children = children.upgrade();
+        let cached_child = children.delete(name);
+
+        let child_inode = match cached_child {
+            Some(child) => {
+                // Cache hit: use the cached dentry
+                child.inode().clone()
+            }
+            None => {
+                // Cache miss: need to lookup from the underlying filesystem
+                drop(children);
+                self.inode.lookup(name)?
+            }
+        };
+
         self.inode.rmdir(name)?;
 
-        let mut children = children.upgrade();
-        children.delete(name);
+        let nlinks = child_inode.metadata().nlinks;
+        if nlinks == 0 {
+            fs::notify::on_inode_removed(&child_inode);
+        }
+        fs::notify::on_delete(self.inode(), &child_inode, || name.to_string());
+        if nlinks == 0 {
+            let publisher = child_inode.fs_event_publisher();
+            publisher.disable_new_subscribers();
+            let removed_nr_subscribers = publisher.remove_all_subscribers();
+            child_inode
+                .fs()
+                .fs_event_subscriber_stats()
+                .remove_subscribers(removed_nr_subscribers);
+        }
         Ok(())
     }
 
@@ -446,6 +507,7 @@ impl DentryChildren {
     }
 
     /// Inserts a negative dentry.
+    #[expect(dead_code)]
     fn insert_negative(&mut self, name: String) {
         let _ = self.dentries.insert(name, None);
     }

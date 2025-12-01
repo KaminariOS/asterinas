@@ -28,6 +28,8 @@ getcpu/getcpu
 getpid/getpid
 hello_pie/hello
 hello_world/hello_world
+inotify/inotify_align
+inotify/inotify_poll
 itimer/setitimer
 itimer/timer_create
 mmap/mmap_and_fork
@@ -44,6 +46,7 @@ process/group_session
 process/job_control
 process/pidfd
 process/wait4
+procfs/dentry_cache
 procfs/pid_mem
 pseudofs/pseudo_inode
 pseudofs/memfd_access_err

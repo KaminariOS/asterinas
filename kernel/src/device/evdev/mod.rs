@@ -28,9 +28,14 @@ use file::{
 use ostd::sync::SpinLock;
 use spin::Once;
 
-use super::char::{acquire_major, register, unregister, CharDevice, MajorIdOwner};
+use super::registry::char::{acquire_major, register, unregister, MajorIdOwner};
 use crate::{
-    device::char::DevtmpfsName, fs::inode_handle::FileIo, prelude::*, util::ring_buffer::RbProducer,
+    fs::{
+        device::{Device, DeviceType},
+        inode_handle::FileIo,
+    },
+    prelude::*,
+    util::ring_buffer::RbProducer,
 };
 
 /// Major device number for evdev devices.
@@ -53,8 +58,6 @@ struct EvdevDevice {
     /// We must make sure that this lock is taken with the local IRQs disabled.
     /// Otherwise, we would be vulnerable to deadlock.
     opened_files: SpinLock<Vec<(Arc<EvdevFileInner>, RbProducer<EvdevEvent>)>>,
-    /// Device node name (e.g., "event0").
-    node_name: String,
     /// Device ID.
     id: DeviceId,
 }
@@ -74,14 +77,12 @@ impl Debug for EvdevDevice {
 
 impl EvdevDevice {
     pub(self) fn new(minor: u32, device: Arc<dyn InputDevice>) -> Self {
-        let node_name = format!("event{}", minor);
         let major = MajorId::new(EVDEV_MAJOR_ID);
         let minor_id = MinorId::new(minor);
 
         Self {
             device,
             opened_files: SpinLock::new(Vec::new()),
-            node_name,
             id: DeviceId::new(major, minor_id),
         }
     }
@@ -162,15 +163,14 @@ impl EvdevDevice {
     }
 
     /// Creates a new opened evdev file for this evdev device.
-    fn create_file(self: &Arc<Self>, buffer_size: usize) -> Result<Arc<EvdevFile>> {
+    fn create_file(self: &Arc<Self>, buffer_size: usize) -> Result<Box<EvdevFile>> {
         // Create the evdev file and get the producer.
         let (file, producer) = EvdevFile::new(buffer_size, Arc::downgrade(self));
 
         // Attach the opened evdev file to this device.
         self.attach_file(file.inner().clone(), producer);
 
-        // Note that this can and should be a `Box` after fixing the char device subsystem.
-        Ok(Arc::new(file))
+        Ok(Box::new(file))
     }
 }
 
@@ -180,16 +180,20 @@ impl InputHandler for EvdevDevice {
     }
 }
 
-impl CharDevice for EvdevDevice {
-    fn devtmpfs_name(&self) -> DevtmpfsName<'_> {
-        DevtmpfsName::new(&self.node_name, Some("input"))
+impl Device for EvdevDevice {
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
     }
 
     fn id(&self) -> DeviceId {
         self.id
     }
 
-    fn open(&self) -> Result<Arc<dyn FileIo>> {
+    fn devtmpfs_path(&self) -> Option<String> {
+        Some(format!("input/event{}", self.id.minor().get()))
+    }
+
+    fn open(&self) -> Result<Box<dyn FileIo>> {
         // Get the device from the registry.
         let devices = EVDEV_DEVICES.lock();
         let Some(evdev) = devices.get(&self.id.minor()) else {
@@ -201,7 +205,7 @@ impl CharDevice for EvdevDevice {
 
         // Create a new opened evdev file for this evdev device.
         let file = evdev.create_file(EVDEV_BUFFER_SIZE)?;
-        Ok(file as Arc<dyn FileIo>)
+        Ok(file as Box<dyn FileIo>)
     }
 }
 
